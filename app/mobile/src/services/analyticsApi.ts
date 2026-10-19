@@ -2,6 +2,23 @@ import { createClientForEnvironment, ENVIRONMENTS, DEFAULT_ENVIRONMENT, type Env
 import * as FileSystem from "expo-file-system";
 import * as Sharing from "expo-sharing";
 
+/**
+ * Legacy-cast shim for expo-file-system.
+ *
+ * Expo SDK 54 introduced a new class-based File/Directory API alongside the
+ * legacy function-based API.  All other consumers in this app use the legacy
+ * `cacheDirectory` + `writeAsStringAsync`/`deleteAsync` pattern via this cast.
+ * Using a mix of both APIs causes runtime "not a function" errors because the
+ * default import's types surface the new API while the legacy functions are
+ * only available at runtime.  See issue #1182.
+ */
+const fileSystemCompat = FileSystem as typeof FileSystem & {
+  cacheDirectory?: string | null;
+  EncodingType?: {
+    UTF8: string;
+  };
+};
+
 export type DateRange = "24h" | "7d" | "30d" | "all";
 
 export interface VolumeDataPoint {
@@ -56,12 +73,12 @@ type ApiReport = {
     totalVolumeUsd: number;
     averageTransactionUsd: number;
   };
-  assetDistribution: Array<{
+  assetDistribution: {
     asset: string;
     volumeUsd: number;
     percentage: number;
     transactionCount: number;
-  }>;
+  }[];
   timeSeries: ApiTimeSeriesItem[];
 };
 
@@ -262,26 +279,31 @@ export async function exportAnalyticsReport(
     fileContent = arrayBufferToBase64(arrayBuffer);
   }
 
-  // Create a temporary file
+  // Create a temporary file using the legacy cacheDirectory pattern (see #1182)
   const fileName = `quickex-analytics-report.${format}`;
-  const fileUri = FileSystem.cacheDirectory + fileName;
-  
+  const cacheDirectory = fileSystemCompat.cacheDirectory ?? "";
+  const fileUri = `${cacheDirectory}${fileName}`;
+
+  const encoding = format === "csv" ? "utf8" : "base64";
+
   await FileSystem.writeAsStringAsync(fileUri, fileContent, {
-    encoding: format === "csv" ? "utf8" : "base64",
+    encoding,
   });
 
-  // Share the file using platform share sheet
-  if (await Sharing.isAvailableAsync()) {
-    await Sharing.shareAsync(fileUri, {
-      mimeType: format === "csv" ? "text/csv" : "application/pdf",
-      dialogTitle: "Export Analytics Report",
-    });
-  } else {
-    throw new Error("Sharing is not available on this platform");
+  try {
+    // Share the file using platform share sheet
+    if (await Sharing.isAvailableAsync()) {
+      await Sharing.shareAsync(fileUri, {
+        mimeType: format === "csv" ? "text/csv" : "application/pdf",
+        dialogTitle: "Export Analytics Report",
+      });
+    } else {
+      throw new Error("Sharing is not available on this platform");
+    }
+  } finally {
+    // Clean up the temporary file after sharing completes or fails
+    await FileSystem.deleteAsync(fileUri, { idempotent: true });
   }
-
-  // Clean up the temporary file
-  await FileSystem.deleteAsync(fileUri, { idempotent: true });
 }
 
 function arrayBufferToBase64(arrayBuffer: ArrayBuffer): string {

@@ -44,7 +44,7 @@ Next.js 15 app. Base URL via `NEXT_PUBLIC_QUICKEX_API_URL` (`src/lib/api.ts`), d
 | Notification center | `src/app/notifications`, `src/components/NotificationCenterProvider.tsx` | **Partial** | UI is real but state is localStorage-only; not fed by the backend `notifications` module. |
 | Webhook management | `src/app/webhooks` → backend `notifications` | **Live** | Full webhook CRUD/logs/redeliver/signature-verify family. |
 | Developer settings (API keys) | `src/app/settings/developer` → backend `api-keys` | **Live** | Key CRUD, usage, rotate. |
-| Profile settings | `src/app/settings` | **Mocked** | Save is a `// TODO: Call API to save profile`; nothing persists to the backend. |
+| Profile settings | `src/app/settings`  backend `usernames` | **Live** | Real `GET /profile?username=&publicKey=` and `PUT /profile`; ownership verified server-side. Backend has no wallet auth yet, so the wallet key travels in the request. |
 | Team management | `src/app/settings/teams` | **Mocked** | In-memory member list and a hardcoded "admin" role; no backend module exists for teams. |
 | Admin — system health | `src/components/admin/SystemHealth.tsx` → backend `health` | **Live** | `GET /health`. |
 | Admin — feature flags & audit logs | `src/components/admin/*` → backend `feature-flags`, `audit` | **Partial** | Endpoints are real but called with **no auth header**, and the backend controllers are unguarded (mismatch #7 — known security gap). |
@@ -77,7 +77,7 @@ NestJS app, ~38 modules wired in `src/app.module.ts`. Supabase (40 migrations) a
 
 ## Mobile (`app/mobile`)
 
-Expo/React Native app, 25 screens in `app/mobile/app`. ⚠️ All "Live" rows are subject to base-URL drift: services default to `localhost:3000` (frontend's port) and `payment-confirmation.tsx` falls back to `api.quickex.com` (wrong TLD) — set `EXPO_PUBLIC_API_URL` explicitly (mismatch #4).
+Expo/React Native app, 25 screens in `app/mobile/app`. **`app/mobile/app` is the routing authority**: user-reachable screens must be expo-router routes there (or components imported by those routes). The legacy `app/mobile/src/screens` tree and its exclusive receipt/build-metadata UI were removed because expo-router never referenced them. Shared implementation belongs under `app/mobile/components` or supporting `src` modules and must be imported by a routed screen. ⚠️ All "Live" rows are subject to base-URL drift: services default to `localhost:3000` (frontend's port) and `payment-confirmation.tsx` falls back to `api.quickex.com` (wrong TLD) — set `EXPO_PUBLIC_API_URL` explicitly (mismatch #4).
 
 | Flow | Owning module | Status | Notes |
 |---|---|---|---|
@@ -90,7 +90,8 @@ Expo/React Native app, 25 screens in `app/mobile/app`. ⚠️ All "Live" rows ar
 | In-app feedback | `services/feedback.ts`, `app/feedback.tsx` | **Partial** | No backend route; every submit silently degrades to the export path (mismatch #3). |
 | Offline action queue | `services/offline-queue.ts` | **Partial** | Queue machinery is real; the built-in `mock-success`/`mock-failure`/`mock-payment` handlers are dev-only **Mocked** actions. |
 | Contacts, security center, wallet session, local data | `services/contacts.ts`, `services/security*.ts`, `services/wallet-session.ts` | **Live** | Deliberately device-local (AsyncStorage/SecureStore); no backend sync by design. |
-| Share receipt | `src/screens/ReceiptScreen.tsx` | **Live** | Builds a *web* share URL; does not consume the backend `GET /v1/receipts/*` API (which has no client consumer yet). |
+| Share receipt | `app/transaction/[id].tsx`, `services/receipts.ts` | **Live** | The routed transaction detail builds shareable receipt text/link and can export receipt artwork. It hydrates receipt data through the live mobile service when route params/cache are incomplete; backend receipt persistence is still **Partial** as noted above. |
+| Build diagnostics | `app/settings.tsx`, `src/config/build.ts` | **Live** | The routed Settings screen exposes version, build metadata, environment, Stellar network and build tag. This replaces the unreachable legacy `BuildMetadataPanel`. |
 | Debug screens (deep-link, notification, offline-queue inspector, QA checklist) | `app/*-debug.tsx`, `app/qa-smoke-checklist.tsx` | **Experimental** | Developer tooling; hidden in production+mainnet builds. |
 
 ## Contract (`app/contract`)
@@ -134,7 +135,7 @@ A separate env-var rollback guard exists at `app/backend/flags.js` (`FEATURE_<NA
 6. **Mobile escrow registry sync** — 404s today due to the `/api` path prefix (mismatch #1). Fix the path before building on it.
 7. **`admin/feature-flags` and `admin/audit`** — unguarded endpoints; adding guards must land together with auth-header changes in the frontend admin pages (mismatch #7).
 8. **Mainnet anything on-chain** — the contract is not deployed to mainnet and all `mainnet.*` flags default to disabled. Treat all on-chain flows as testnet-only.
-9. **Frontend discovery / profile settings / teams pages** — pure scaffolding on mock or in-memory data.
+9. **Frontend discovery / teams pages** — pure scaffolding on mock or in-memory data. (Profile settings is now live; see above.)
 10. **Everything in `.kiro/specs/`** — requirements documents, not shipped behavior.
 
 ## How to use this map

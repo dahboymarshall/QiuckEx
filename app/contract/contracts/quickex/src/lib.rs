@@ -63,6 +63,8 @@ mod pause_policy;
 mod pause_policy_test;
 mod privacy;
 #[cfg(test)]
+mod privacy_history_test;
+#[cfg(test)]
 mod receipt_reference_test;
 #[cfg(test)]
 mod role_test;
@@ -199,7 +201,7 @@ impl QuickexContract {
     }
 
     /// Deprecated audit history of levels requested via `enable_privacy`,
-    /// newest first. Purely additive; not authoritative.
+    /// newest first, capped at 64 entries. Not authoritative.
     pub fn privacy_history(env: Env, account: Address) -> Vec<u32> {
         privacy::privacy_history(&env, account)
     }
@@ -1422,6 +1424,7 @@ impl QuickexContract {
     ///
     /// # Errors
     /// * `OracleSourceAlreadyRegistered` - `source` is already registered
+    /// * `OracleSourceLimitExceeded`     - maximum number of sources (`oracle::MAX_ORACLE_SOURCES`) reached
     pub fn register_oracle_source(
         env: Env,
         caller: Address,
@@ -1580,10 +1583,11 @@ impl QuickexContract {
         escrow::is_refund_eligible(&env, commitment)
     }
 
-    /// Verify withdrawal parameters without submitting a transaction (read-only).
+    /// Pre-flight check whether a withdrawal is eligible to proceed (read-only).
     ///
-    /// Recomputes the commitment from `amount`, `salt`, and `owner`, then checks that an
-    /// escrow exists with status `Pending`, matching amount, and not yet expired.
+    /// Returns true only when the escrow is pending and unexpired under the withdrawal
+    /// rules, `amount` matches `amount_due`, and it is fully funded (`amount_paid >=
+    /// amount_due`). The funding check mirrors [`escrow::withdraw_item`].
     ///
     /// # Arguments
     /// * `env` - The contract environment
@@ -1612,7 +1616,7 @@ impl QuickexContract {
                 if e.expires_at > 0 && env.ledger().timestamp() >= e.expires_at {
                     return false;
                 }
-                e.amount_due == amount
+                e.amount_due == amount && e.amount_paid >= e.amount_due
             }
             None => false,
         }
@@ -1695,6 +1699,7 @@ impl QuickexContract {
     /// # Errors
     /// * `InvalidAmount`            – amount ≤ 0.
     /// * `ContractPaused`           – contract is paused.
+    /// * `ReentrancyDetected`       – a hook is currently executing.
     /// * `StealthAddressMismatch`   – on-chain re-derivation does not match.
     /// * `StealthAddressAlreadyUsed`– stealth address already has a deposit.
     pub fn register_ephemeral_key(
@@ -1704,6 +1709,7 @@ impl QuickexContract {
         valid_until: u64,
     ) -> Result<BytesN<32>, QuickexError> {
         pause_policy::require_entry_allowed(&env, EntryPoint::StealthDeposit)?;
+        hook::assert_not_reentrant(&env)?;
         stealth::register_ephemeral_key(&env, params, nonce, valid_until)
     }
 
